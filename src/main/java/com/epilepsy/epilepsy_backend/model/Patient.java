@@ -29,7 +29,7 @@ public class Patient {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    @OneToMany(mappedBy = "patient", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "patient", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
     @OrderBy("createdAt DESC")
     private List<Visit> visits = new ArrayList<>();
 

@@ -1,5 +1,5 @@
 package com.epilepsy.epilepsy_backend.controller;
-
+import org.springframework.transaction.annotation.Transactional;
 import com.epilepsy.epilepsy_backend.dto.Dtos;
 import com.epilepsy.epilepsy_backend.service.PatientService;
 import com.epilepsy.epilepsy_backend.service.VisitService;
@@ -57,6 +57,7 @@ public class EpilepsyController {
 
     // GET /api/patients
     @GetMapping("/patients")
+    @Transactional
     public ResponseEntity<List<Dtos.PatientSummaryResponse>>
             searchPatients(
                 @RequestParam(required = false) String  name,
