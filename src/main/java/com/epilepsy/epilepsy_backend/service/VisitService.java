@@ -4,6 +4,7 @@ import com.epilepsy.epilepsy_backend.dto.Dtos;
 import com.epilepsy.epilepsy_backend.model.Patient;
 import com.epilepsy.epilepsy_backend.model.Visit;
 import com.epilepsy.epilepsy_backend.repository.PatientRepository;
+import com.epilepsy.epilepsy_backend.repository.VisitRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.*;
@@ -30,11 +31,14 @@ public class VisitService {
     private String baseUrl;
 
     private final PatientRepository patientRepo;
-    private final RestTemplate restTemplate;
+    private final VisitRepository   visitRepo;
+    private final RestTemplate      restTemplate;
 
     public VisitService(PatientRepository patientRepo,
-                        RestTemplate restTemplate) {
+                        VisitRepository   visitRepo,
+                        RestTemplate      restTemplate) {
         this.patientRepo  = patientRepo;
+        this.visitRepo    = visitRepo;
         this.restTemplate = restTemplate;
     }
 
@@ -43,39 +47,57 @@ public class VisitService {
                                           MultipartFile flairFile)
                                           throws IOException {
 
-        
-        /// 1. Find existing patient or create new
-    Patient.Gender gender = Patient.Gender.valueOf(req.gender);
-    java.util.List<Patient> existing = patientRepo.findExistingPatients(
-        req.name.trim(), req.age, gender);
-    Patient patient;
-    if (existing.isEmpty()) {
-        Patient newPatient = new Patient();
-        newPatient.setName(req.name.trim());
-        newPatient.setAge(req.age);
-        newPatient.setGender(gender);
-        patient = patientRepo.save(newPatient);
-    } else {
-    patient = existing.get(0);
-}
+        // 1. Resolve patient
+        Patient patient;
+        if (req.patientId != null) {
+            patient = patientRepo.findById(req.patientId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                    "Patient not found: " + req.patientId));
+        } else {
+            Patient.Gender gender = Patient.Gender.valueOf(req.gender.trim().toUpperCase());
+            java.util.List<Patient> existing = patientRepo.findExistingPatients(
+                req.name.trim(), req.age, gender);
+
+            if (!existing.isEmpty()) {
+                patient = existing.get(0);
+                if (req.phone   != null && !req.phone.isBlank())   patient.setPhone(req.phone);
+                if (req.email   != null && !req.email.isBlank())   patient.setEmail(req.email);
+                if (req.address != null && !req.address.isBlank()) patient.setAddress(req.address);
+                patientRepo.save(patient);
+            } else {
+                Patient newPatient = new Patient();
+                newPatient.setName(req.name.trim());
+                newPatient.setAge(req.age);
+                newPatient.setGender(gender);
+                newPatient.setPhone(req.phone);
+                newPatient.setEmail(req.email);
+                newPatient.setAddress(req.address);
+                patient = patientRepo.save(newPatient);
+            }
+        }
+
         // 2. Save both NIfTI files
         String t1Path    = saveNiftiFile(t1File,    "t1");
         String flairPath = saveNiftiFile(flairFile, "flair");
 
-        // 3. Call AI service with both files
+        // 3. Call AI service
         Dtos.AiPredictionResponse aiResp = callAiService(t1Path, flairPath);
 
-        // 4. Save visit
+        // 4. Build visit and save directly via visitRepo to get generated ID back
         Visit visit = new Visit();
         visit.setPatient(patient);
-        visit.setMriPath(t1Path);          // store T1 path as primary
+        visit.setMriPath(t1Path);
         visit.setPrescription(req.prescription);
         visit.setResult(mapResult(aiResp.result));
-        patient.getVisits().add(visit);
-        patientRepo.save(patient);
+        visit.setConfidence(aiResp.confidence);
+        visit.setEpilepsyProb(aiResp.epilepsyProb);
+        visit.setNoEpilepsyProb(aiResp.noEpilepsyProb);
 
-        // 5. Return response with confidence values
-        return Dtos.VisitResponse.from(visit, baseUrl, aiResp);
+        // Save directly — returns the managed entity with generated id and createdAt
+        Visit savedVisit = visitRepo.save(visit);
+
+        // 5. Return response using savedVisit which has id and createdAt populated
+        return Dtos.VisitResponse.from(savedVisit, baseUrl, aiResp);
     }
 
     private String saveNiftiFile(MultipartFile file, String prefix)
@@ -86,13 +108,11 @@ public class VisitService {
         String ext      = getExtension(file.getOriginalFilename());
         String filename = prefix + "_" + UUID.randomUUID() + "." + ext;
         Path   dest     = dir.resolve(filename);
-        Files.copy(file.getInputStream(), dest,
-                   StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(file.getInputStream(), dest, StandardCopyOption.REPLACE_EXISTING);
         return dest.toString();
     }
 
-    private Dtos.AiPredictionResponse callAiService(String t1Path,
-                                                     String flairPath) {
+    private Dtos.AiPredictionResponse callAiService(String t1Path, String flairPath) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
@@ -100,20 +120,14 @@ public class VisitService {
         body.add("t1_file",    new FileSystemResource(t1Path));
         body.add("flair_file", new FileSystemResource(flairPath));
 
-        HttpEntity<MultiValueMap<String, Object>> request =
-            new HttpEntity<>(body, headers);
+        HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
 
-        ResponseEntity<Dtos.AiPredictionResponse> response =
-            restTemplate.postForEntity(
-                aiServiceUrl + "/predict",
-                request,
-                Dtos.AiPredictionResponse.class
-            );
+        ResponseEntity<Dtos.AiPredictionResponse> response = restTemplate.postForEntity(
+            aiServiceUrl + "/predict", request, Dtos.AiPredictionResponse.class);
 
-        if (response.getBody() == null ||
-            response.getBody().result == null) {
+        if (response.getBody() == null || response.getBody().result == null)
             throw new RuntimeException("AI service returned empty response");
-        }
+
         return response.getBody();
     }
 
@@ -128,12 +142,9 @@ public class VisitService {
         if (name == null)
             throw new IllegalArgumentException("Missing filename");
         if (!name.endsWith(".nii") && !name.endsWith(".nii.gz"))
-            throw new IllegalArgumentException(
-                "Only .nii and .nii.gz files are allowed");
-        long maxBytes = 200L * 1024 * 1024; // 200 MB
-        if (file.getSize() > maxBytes)
-            throw new IllegalArgumentException(
-                "File exceeds 200 MB limit");
+            throw new IllegalArgumentException("Only .nii and .nii.gz files are allowed");
+        if (file.getSize() > 200L * 1024 * 1024)
+            throw new IllegalArgumentException("File exceeds 200 MB limit");
     }
 
     private String getExtension(String filename) {

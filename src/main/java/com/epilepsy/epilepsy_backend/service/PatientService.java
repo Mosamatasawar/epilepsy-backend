@@ -32,10 +32,14 @@ public class PatientService {
             .and(PatientSpecifications.hasAge(age))
             .and(PatientSpecifications.hasGender(gender));
 
-        return patientRepo.findAll(spec)
-            .stream()
-            .map(Dtos.PatientSummaryResponse::from)
-            .collect(Collectors.toList());
+        // AFTER — use the searchByName query method that already exists on PatientRepository
+return patientRepo.searchByName(name == null ? "" : name)
+    .stream()
+    .filter(p -> age    == null || p.getAge().equals(age))
+    .filter(p -> gender == null || gender.isBlank()
+                               || p.getGender().name().equalsIgnoreCase(gender))
+    .map(Dtos.PatientSummaryResponse::from)
+    .collect(Collectors.toList());
     }
 
     public Dtos.PatientDetailResponse getDetail(Long id) {

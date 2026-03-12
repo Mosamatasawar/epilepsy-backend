@@ -24,8 +24,7 @@ public class PatientSpecifications {
         return (root, query, cb) -> {
             if (gender == null || gender.isBlank()) return cb.conjunction();
             try {
-                return cb.equal(root.get("gender"),
-                                Patient.Gender.valueOf(gender));
+                return cb.equal(root.get("gender"), Patient.Gender.valueOf(gender.trim().toUpperCase()));
             } catch (IllegalArgumentException e) {
                 return cb.disjunction();
             }

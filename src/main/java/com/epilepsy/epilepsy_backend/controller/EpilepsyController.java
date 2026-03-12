@@ -1,104 +1,165 @@
 package com.epilepsy.epilepsy_backend.controller;
-import org.springframework.transaction.annotation.Transactional;
+
 import com.epilepsy.epilepsy_backend.dto.Dtos;
-import com.epilepsy.epilepsy_backend.service.PatientService;
+import com.epilepsy.epilepsy_backend.model.Patient;
+import com.epilepsy.epilepsy_backend.model.Visit;
+import com.epilepsy.epilepsy_backend.repository.PatientRepository;
+import com.epilepsy.epilepsy_backend.repository.VisitRepository;
 import com.epilepsy.epilepsy_backend.service.VisitService;
+import jakarta.persistence.EntityNotFoundException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
-import java.nio.file.Paths;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*")
 public class EpilepsyController {
 
-    @Value("${app.upload-dir:D:/EpilepsySystem/uploads/mri}")
-    private String uploadDir;
+    @Autowired PatientRepository patientRepo;
+    @Autowired VisitRepository   visitRepo;
+    @Autowired VisitService      visitService;
 
-    private final VisitService   visitService;
-    private final PatientService patientService;
+    @Value("${app.base-url:http://localhost:8080}")
+    private String baseUrl;
 
-    public EpilepsyController(VisitService visitService,
-                               PatientService patientService) {
-        this.visitService   = visitService;
-        this.patientService = patientService;
+    // ── Patients ──────────────────────────────────────────────────────────
+
+    @GetMapping("/patients")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> listPatients() {
+        List<Dtos.PatientResponse> list = patientRepo.findAll().stream()
+            .map(Dtos.PatientResponse::from)
+            .collect(Collectors.toList());
+        return ResponseEntity.ok(list);
     }
 
-    // POST /api/visits  — accepts T1 + FLAIR NIfTI files
-    @PostMapping(value = "/visits",
-                 consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Dtos.VisitResponse> createVisit(
-            @RequestParam("name")                          String name,
-            @RequestParam("age")                           Integer age,
-            @RequestParam("gender")                        String gender,
-            @RequestParam(value = "prescription",
-                          required = false)                String prescription,
-            @RequestParam("t1_file")                       MultipartFile t1File,
-            @RequestParam("flair_file")                    MultipartFile flairFile)
-            throws IOException {
+    @GetMapping("/patients/search")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> searchPatients(@RequestParam String q) {
+        List<Dtos.PatientResponse> list = patientRepo.searchByNameOrPhone(q).stream()
+            .map(Dtos.PatientResponse::from)
+            .collect(Collectors.toList());
+        return ResponseEntity.ok(list);
+    }
 
+    @GetMapping("/patients/{id}")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> getPatient(@PathVariable Long id) {
+        Patient p = patientRepo.findByIdWithVisits(id)
+            .orElseThrow(() -> new EntityNotFoundException("Patient not found: " + id));
+        return ResponseEntity.ok(Dtos.PatientWithVisitsResponse.from(p, baseUrl));
+    }
+
+    @PostMapping("/patients")
+    @Transactional
+    public ResponseEntity<?> createPatient(@RequestBody Dtos.CreatePatientRequest req) {
+         System.out.println("DEBUG createPatient gender: '" + req.gender + "'");
+        Patient p = new Patient();
+        p.setName(req.name.trim());
+        p.setAge(req.age);
+        p.setGender(Patient.Gender.valueOf(req.gender.trim().toUpperCase()));
+        p.setPhone(req.phone);
+        p.setEmail(req.email);
+        p.setAddress(req.address);
+        return ResponseEntity.ok(Dtos.PatientResponse.from(patientRepo.save(p)));
+    }
+
+    @PutMapping("/patients/{id}")
+    @Transactional
+    public ResponseEntity<?> updatePatient(@PathVariable Long id,
+                                           @RequestBody Dtos.CreatePatientRequest req) {
+        Patient p = patientRepo.findById(id)
+            .orElseThrow(() -> new EntityNotFoundException("Patient not found: " + id));
+        p.setName(req.name.trim());
+        p.setAge(req.age);
+        p.setGender(Patient.Gender.valueOf(req.gender.trim().toUpperCase()));
+        p.setPhone(req.phone);
+        p.setEmail(req.email);
+        p.setAddress(req.address);
+        return ResponseEntity.ok(Dtos.PatientResponse.from(patientRepo.save(p)));
+    }
+
+    @DeleteMapping("/patients/{id}")
+    @Transactional
+    public ResponseEntity<Void> deletePatient(@PathVariable Long id) {
+        if (!patientRepo.existsById(id))
+            throw new EntityNotFoundException("Patient not found: " + id);
+        patientRepo.deleteById(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ── Visits / Diagnosis ────────────────────────────────────────────────
+
+    @PostMapping("/visits")
+    public ResponseEntity<?> createVisit(
+        @RequestParam(required = false) Long    patientId,
+        @RequestParam(required = false) String  name,
+        @RequestParam(required = false) Integer age,
+        @RequestParam(required = false) String  gender,
+        @RequestParam(required = false) String  phone,
+        @RequestParam(required = false) String  email,
+        @RequestParam(required = false) String  address,
+        @RequestParam(required = false) String  prescription,
+        @RequestParam("t1File")         MultipartFile t1File,
+        @RequestParam("flairFile")      MultipartFile flairFile
+    ) throws Exception {
+         System.out.println("DEBUG gender received: '" + gender + "'");
         Dtos.CreateVisitRequest req = new Dtos.CreateVisitRequest();
+        req.patientId    = patientId;
         req.name         = name;
         req.age          = age;
-        req.gender       = gender;
+        req.gender       = gender != null ? gender.trim().toUpperCase() : null;
+        req.phone        = phone;
+        req.email        = email;
+        req.address      = address;
         req.prescription = prescription;
 
-        return ResponseEntity.ok(
-            visitService.createVisit(req, t1File, flairFile));
+        // VisitService.createVisit takes exactly 3 args (req, t1File, flairFile)
+        // baseUrl is injected inside VisitService via @Value — not passed here
+        Dtos.VisitResponse resp = visitService.createVisit(req, t1File, flairFile);
+        return ResponseEntity.ok(resp);
     }
 
-    // GET /api/patients
-    @GetMapping("/patients")
-    @Transactional
-    public ResponseEntity<List<Dtos.PatientSummaryResponse>>
-            searchPatients(
-                @RequestParam(required = false) String  name,
-                @RequestParam(required = false) Integer age,
-                @RequestParam(required = false) String  gender) {
-
-        return ResponseEntity.ok(
-            patientService.search(name, age, gender));
+    @GetMapping("/visits/{id}")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> getVisit(@PathVariable Long id) {
+        Visit found = visitRepo.findByIdWithPatient(id)
+            .orElseThrow(() -> new EntityNotFoundException("Visit not found: " + id));
+        return ResponseEntity.ok(Dtos.VisitResponse.from(found, baseUrl, null));
     }
 
-    // GET /api/patients/{id}
-    @GetMapping("/patients/{id}")
-    public ResponseEntity<Dtos.PatientDetailResponse>
-            getPatient(@PathVariable Long id) {
-        return ResponseEntity.ok(patientService.getDetail(id));
+    @GetMapping("/patients/{id}/visits")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> getPatientVisits(@PathVariable Long id) {
+        Patient p = patientRepo.findByIdWithVisits(id)
+            .orElseThrow(() -> new EntityNotFoundException("Patient not found: " + id));
+        List<Dtos.VisitResponse> visits = p.getVisits().stream()
+            .map(v -> Dtos.VisitResponse.from(v, baseUrl, null))
+            .collect(Collectors.toList());
+        return ResponseEntity.ok(visits);
     }
 
-    // GET /api/images/{filename}
-    @GetMapping("/images/{filename}")
-    public ResponseEntity<Resource> getImage(
-            @PathVariable String filename) {
+    // ── Error handlers ────────────────────────────────────────────────────
 
-        java.nio.file.Path path =
-            Paths.get(uploadDir).resolve(filename).normalize();
-        Resource resource = new FileSystemResource(path);
-
-        if (!resource.exists())
-            return ResponseEntity.notFound().build();
-
-        String contentType = filename.endsWith(".png")
-            ? "image/png" : "image/jpeg";
-
-        return ResponseEntity.ok()
-            .contentType(MediaType.parseMediaType(contentType))
-            .body(resource);
+    @ExceptionHandler(EntityNotFoundException.class)
+    public ResponseEntity<?> handleNotFound(EntityNotFoundException ex) {
+        return ResponseEntity.status(404).body(Map.of("error", ex.getMessage()));
     }
-    // DELETE /api/patients/{id}
-    @DeleteMapping("/patients/{id}")
-    public ResponseEntity<Void> deletePatient(@PathVariable Long id) {
-    patientService.deletePatient(id);
-    return ResponseEntity.noContent().build();
-}
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<?> handleBadRequest(IllegalArgumentException ex) {
+        return ResponseEntity.status(400).body(Map.of("error", ex.getMessage()));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<?> handleError(Exception ex) {
+        return ResponseEntity.status(500).body(Map.of("error", ex.getMessage()));
+    }
 }
