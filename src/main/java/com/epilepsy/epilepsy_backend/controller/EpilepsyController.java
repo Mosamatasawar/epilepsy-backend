@@ -145,9 +145,16 @@ public class EpilepsyController {
             .collect(Collectors.toList());
         return ResponseEntity.ok(visits);
     }
+@PatchMapping("/visits/{id}/prescription")
+    public ResponseEntity<?> updatePrescription(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        return visitRepo.findByIdWithPatient(id).map(visit -> {
+            visit.setPrescription(body.get("prescription"));
+            visitRepo.save(visit);
+            return ResponseEntity.ok(Dtos.VisitResponse.from(visit, baseUrl));
+        }).orElse(ResponseEntity.notFound().build());
+    }
 
     // ── Error handlers ────────────────────────────────────────────────────
-
     @ExceptionHandler(EntityNotFoundException.class)
     public ResponseEntity<?> handleNotFound(EntityNotFoundException ex) {
         return ResponseEntity.status(404).body(Map.of("error", ex.getMessage()));

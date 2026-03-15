@@ -16,7 +16,7 @@ public class CorsConfig {
                 registry.addMapping("/api/**")
                     .allowedOrigins("http://localhost:5173",
     "https://epilepsy-frontend-six.vercel.app/" )
-                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
                     .allowedHeaders("*")
                     .maxAge(3600);
             }
